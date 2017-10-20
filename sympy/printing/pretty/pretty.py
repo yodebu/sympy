@@ -1018,6 +1018,10 @@ class PrettyPrinter(Printer):
         D.binding = prettyForm.OPEN
         return D
 
+    def _print_ITE(self, ite):
+        from sympy.functions.elementary.piecewise import Piecewise
+        return self._print(ite.rewrite(Piecewise))
+
     def _hprint_vec(self, v):
         D = None
 
@@ -1652,7 +1656,7 @@ class PrettyPrinter(Printer):
 
             return self._print_seq(i.args[:2], left, right)
 
-    def _print_AccumuBounds(self, i):
+    def _print_AccumulationBounds(self, i):
         left = '<'
         right = '>'
 
@@ -1846,13 +1850,22 @@ class PrettyPrinter(Printer):
         return self._print_dict(d)
 
     def _print_set(self, s):
+        if not s:
+            return prettyForm('set()')
         items = sorted(s, key=default_sort_key)
-        pretty = self._print_seq(items, '[', ']')
+        pretty = self._print_seq(items)
+        pretty = prettyForm(*pretty.parens('{', '}', ifascii_nougly=True))
+        return pretty
+
+    def _print_frozenset(self, s):
+        if not s:
+            return prettyForm('frozenset()')
+        items = sorted(s, key=default_sort_key)
+        pretty = self._print_seq(items)
+        pretty = prettyForm(*pretty.parens('{', '}', ifascii_nougly=True))
         pretty = prettyForm(*pretty.parens('(', ')', ifascii_nougly=True))
         pretty = prettyForm(*stringPict.next(type(s).__name__, pretty))
         return pretty
-
-    _print_frozenset = _print_set
 
     def _print_PolyRing(self, ring):
         return prettyForm(sstr(ring))
@@ -2009,6 +2022,16 @@ class PrettyPrinter(Printer):
         pform_arg = prettyForm(" "*arg.width())
         pform_arg = prettyForm(*pform_arg.below(arg))
         pform = prettyForm(*pform.right(pform_arg))
+        if len(e.args) == 1:
+            return pform
+        m, x = e.args
+        # TODO: copy-pasted from _print_Function: can we do better?
+        prettyFunc = pform
+        prettyArgs = prettyForm(*self._print_seq([x]).parens())
+        pform = prettyForm(
+            binding=prettyForm.FUNC, *stringPict.next(prettyFunc, prettyArgs))
+        pform.prettyFunc = prettyFunc
+        pform.prettyArgs = prettyArgs
         return pform
 
     def _print_catalan(self, e):

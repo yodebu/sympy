@@ -8,7 +8,7 @@ import re as regex
 from collections import defaultdict
 
 from .containers import Tuple
-from .sympify import converter, sympify, _sympify, SympifyError
+from .sympify import converter, sympify, _sympify, SympifyError, _convert_numpy_types
 from .singleton import S, Singleton
 from .expr import Expr, AtomicExpr
 from .decorators import _sympifyit
@@ -947,6 +947,7 @@ class Float(Number):
                             issue=12820,
                             deprecated_since_version="1.1").warn()
             dps = prec
+        del prec  # avoid using this deprecated kwarg
 
         if dps is not None and precision is not None:
             raise ValueError('Both decimal and binary precision supplied. '
@@ -966,6 +967,8 @@ class Float(Number):
             num = '+inf'
         elif num is S.NegativeInfinity:
             num = '-inf'
+        elif type(num).__module__ == 'numpy': # support for numpy datatypes
+            num = _convert_numpy_types(num)
         elif isinstance(num, mpmath.mpf):
             if precision is None:
                 if dps is None:
@@ -1016,6 +1019,8 @@ class Float(Number):
         if precision is None or precision == '':
             precision = mlib.libmpf.dps_to_prec(dps)
 
+        precision = int(precision)
+
         if isinstance(num, float):
             _mpf_ = mlib.from_float(num, precision, rnd)
         elif isinstance(num, string_types):
@@ -1032,13 +1037,16 @@ class Float(Number):
                     _mpf_ = _mpf_ninf
             else:
                 raise ValueError("unexpected decimal value %s" % str(num))
-        elif isinstance(num, Rational):
-            _mpf_ = mlib.from_rational(num.p, num.q, precision, rnd)
         elif isinstance(num, tuple) and len(num) in (3, 4):
             if type(num[1]) is str:
                 # it's a hexadecimal (coming from a pickled object)
                 # assume that it is in standard form
                 num = list(num)
+                # If we're loading an object pickled in Python 2 into
+                # Python 3, we may need to strip a tailing 'L' because
+                # of a shim for int on Python 3, see issue #13470.
+                if num[1].endswith('L'):
+                    num[1] = num[1][:-1]
                 num[1] = long(num[1], 16)
                 _mpf_ = tuple(num)
             else:
@@ -1047,12 +1055,11 @@ class Float(Number):
                     return Float._new(num, precision)
                 else:
                     return (S.NegativeOne**num[0]*num[1]*S(2)**num[2]).evalf(precision)
-        elif isinstance(num, Float):
-            _mpf_ = num._mpf_
-            if precision < num._prec:
-                _mpf_ = mpf_norm(_mpf_, precision)
         else:
-            _mpf_ = mpmath.mpf(num, prec=prec)._mpf_
+            try:
+                _mpf_ = num._as_mpf_val(precision)
+            except (NotImplementedError, AttributeError):
+                _mpf_ = mpmath.mpf(num, prec=precision)._mpf_
 
         # special cases
         if _mpf_ == _mpf_zero:
@@ -1183,13 +1190,11 @@ class Float(Number):
         if isinstance(other, Rational) and other.q != 1 and global_evaluate[0]:
             # calculate mod with Rationals, *then* round the result
             return Float(Rational.__mod__(Rational(self), other),
-                prec_to_dps(self._prec))
+                         precision=self._prec)
         if isinstance(other, Float) and global_evaluate[0]:
             r = self/other
             if r == int(r):
-                prec = max([prec_to_dps(i)
-                    for i in (self._prec, other._prec)])
-                return Float(0, prec)
+                return Float(0, precision=max(self._prec, other._prec))
         if isinstance(other, Number) and global_evaluate[0]:
             rhs, prec = other._as_mpf_op(self._prec)
             return Float._new(mlib.mpf_mod(self._mpf_, rhs, prec, rnd), prec)
@@ -1640,7 +1645,7 @@ class Rational(Number):
             if isinstance(other, Float):
                 # calculate mod with Rationals, *then* round the answer
                 return Float(self.__mod__(Rational(other)),
-                    prec_to_dps(other._prec))
+                             precision=other._prec)
             return Number.__mod__(self, other)
         return Number.__mod__(self, other)
 
@@ -1947,7 +1952,7 @@ class Integer(Rational):
     __slots__ = ['p']
 
     def _as_mpf_val(self, prec):
-        return mlib.from_int(self.p, prec)
+        return mlib.from_int(self.p, prec, rnd)
 
     def _mpmath_(self, prec, rnd):
         return mpmath.make_mpf(self._as_mpf_val(prec))
@@ -3269,6 +3274,8 @@ class ComplexInfinity(with_metaclass(Singleton, AtomicExpr)):
     is_infinite = True
     is_number = True
     is_prime = False
+    is_complex = True
+    is_real = False
 
     __slots__ = []
 
